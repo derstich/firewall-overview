@@ -126,6 +126,31 @@ def mk_nat(proto, src, dst, dport, state, action, note,
 # iptables ENGINE  (reads iptables-save text)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def load_ipsets():
+    """Return {set_name: [ip, ...]} by parsing `sudo ipset list`."""
+    result = {}
+    try:
+        r = subprocess.run(["sudo", "ipset", "list"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            return result
+        name = None; in_members = False
+        for line in r.stdout.splitlines():
+            line = line.rstrip()
+            if line.startswith("Name:"):
+                name = line.split(":", 1)[1].strip()
+                result[name] = []; in_members = False
+            elif line == "Members:":
+                in_members = True
+            elif in_members:
+                if line and re.match(r"[\d:a-fA-F./]", line):
+                    result[name].append(line.strip())
+                elif line:
+                    in_members = False
+    except Exception:
+        pass
+    return result
+
 def ipt_parse(raw):
     chains = defaultdict(list); policies = {}
     all_chains = defaultdict(list); cur = None
@@ -155,7 +180,12 @@ def ipt_chain_final(name, chains, seen=None):
             return "DROP"
     return "ALLOW"
 
-def ipt_parse_rule(raw_rule, chains):
+def _ipset_short(name):
+    """Abbreviated set name for the narrow Src/Dst column."""
+    return ("{" + name[:11] + "..}") if len(name) > 13 else ("{" + name + "}")
+
+def ipt_parse_rule(raw_rule, chains, ipsets=None):
+    if ipsets is None: ipsets = {}
     def g(pat, default=""):
         m = re.search(pat, raw_rule); return m.group(1) if m else default
     proto  = g(r"(?<!\S)-p\s+(\S+)",  "any")
@@ -174,9 +204,22 @@ def ipt_parse_rule(raw_rule, chains):
     elif target == "":                            action = None
     else:                                         action = "ALLOW"
 
+    # Resolve ipset references (--match-set SETNAME src|dst)
+    note = ""
+    ms = re.search(r"--match-set\s+(\S+)\s+(src|dst)", raw_rule)
+    if ms:
+        set_name, direction = ms.group(1), ms.group(2)
+        ips = ipsets.get(set_name, [])
+        ip_str = ", ".join(ips) if ips else "(empty)"
+        note = f"{direction.upper()} set {set_name}: {ip_str}"
+        if direction == "src":
+            src = _ipset_short(set_name)
+        else:
+            dst = _ipset_short(set_name)
+
     return dict(proto=proto, src=src, dst=dst, dport=dport, sport=sport,
                 state=state, iface=iface, neg_iface=False,
-                action=action, note="", row_type="rule")
+                action=action, note=note, row_type="rule")
 
 IPT_SKIP = [
     r"--ctstate\s+(RELATED,ESTABLISHED|UNTRACKED)",
@@ -240,7 +283,8 @@ def ipt_collect_dnat(all_chains, table, chain_name, seen=None):
             rows.extend(ipt_collect_dnat(all_chains, table, target, seen))
     return rows
 
-def ipt_collect_ingress(filter_chains, all_chains, policies):
+def ipt_collect_ingress(filter_chains, all_chains, policies, ipsets=None):
+    if ipsets is None: ipsets = {}
     rows = [separator("Step 1 – RAW PREROUTING (before DNAT)")]
     rows.extend(ipt_collect_raw(all_chains))
 
@@ -267,7 +311,7 @@ def ipt_collect_ingress(filter_chains, all_chains, policies):
                 rows.append(static_row("DEFAULT (no match above)", action,
                                        "All connections not explicitly covered above"))
                 added_default = True; continue
-        r = ipt_parse_rule(raw_rule, filter_chains)
+        r = ipt_parse_rule(raw_rule, filter_chains, ipsets)
         if r["action"] is not None:
             if r["action"] == "DROP" and r.get("dport") in dnat_ports:
                 r["note"] = "Illumio enforcement – applies only to traffic NOT redirected via DNAT"
@@ -277,7 +321,8 @@ def ipt_collect_ingress(filter_chains, all_chains, policies):
                                "All connections not explicitly covered above"))
     return rows, dnat_ports
 
-def ipt_collect_egress(filter_chains, policies):
+def ipt_collect_egress(filter_chains, policies, ipsets=None):
+    if ipsets is None: ipsets = {}
     output_chain = ipt_get_effective_chain(filter_chains, "OUTPUT")
     rows = [separator(f"Step – OUTPUT filter ({output_chain})")]
     rows.append(static_row("lo interface",        "ALLOW"))
@@ -296,7 +341,7 @@ def ipt_collect_egress(filter_chains, policies):
                 rows.append(static_row("DEFAULT (no match above)", action,
                                        "No explicit DROP for outbound traffic"))
                 added_default = True; continue
-        r = ipt_parse_rule(raw_rule, filter_chains)
+        r = ipt_parse_rule(raw_rule, filter_chains, ipsets)
         if r["action"] is not None:
             rows.append(r)
     if not added_default:
@@ -312,14 +357,15 @@ def run_iptables(raw_text, hostname, outfile, backend_label):
     print(f"{B}{bar}{R}")
 
     filter_chains, policies, all_chains = ipt_parse(raw_text)
+    ipsets = load_ipsets()
 
     print(f"\n{B}Default Policies (*filter):{R}")
     for ch in ("INPUT","FORWARD","OUTPUT"):
         p = policies.get(ch,"ACCEPT"); c = GRN if p=="ACCEPT" else RED
         print(f"  {ch:<12}: {B}{c}{p}{R}")
 
-    ingress, dnat_ports = ipt_collect_ingress(filter_chains, all_chains, policies)
-    egress              = ipt_collect_egress(filter_chains, policies)
+    ingress, dnat_ports = ipt_collect_ingress(filter_chains, all_chains, policies, ipsets)
+    egress              = ipt_collect_egress(filter_chains, policies, ipsets)
 
     print_section("INPUT chain",  CYN, ingress, "INGRESS")
     print_section("OUTPUT chain", YEL, egress,  "EGRESS")
