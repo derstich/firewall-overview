@@ -1,6 +1,8 @@
 # iptables-overview
 
-Displays a clear, color-coded overview of all ingress and egress firewall rules — including NAT/DNAT routing. Available in three variants: Python (`iptables-save`), Bash (`iptables-save`), and Python nft-native (`nft -j list ruleset`).
+Displays a clear, color-coded overview of all ingress and egress firewall rules — including NAT/DNAT routing.
+
+**Recommended: use `firewall_overview.py`** — it auto-detects whether the system uses iptables or nftables and picks the best parser automatically. Individual scripts are also available if you want to force a specific backend.
 
 ## Features
 
@@ -12,9 +14,43 @@ Displays a clear, color-coded overview of all ingress and egress firewall rules 
 
 ---
 
+## Auto-detecting version (`firewall_overview.py`) — recommended
+
+Automatically selects the best parser:
+1. Uses `iptables-save` when iptables has active rules (covers both `iptables-legacy` and `iptables-nft` — gives full port detail via multiport/ctstate)
+2. Falls back to `nft -j list ruleset` for pure nftables systems
+
+### Requirements
+
+- Python 3.6+
+- `sudo` access to run `iptables-save` and/or `nft`
+
+### Usage
+
+```bash
+# Auto-detect backend (default)
+python3 firewall_overview.py
+
+# Force iptables engine
+python3 firewall_overview.py --backend iptables
+
+# Force nft engine
+python3 firewall_overview.py --backend nft
+
+# Specify output file
+python3 firewall_overview.py -o /tmp/my-server.txt
+```
+
+The detected backend is shown in the header, e.g.:
+```
+Firewall Overview  –  hostname.example.com  [iptables / iptables-nft – auto-detected]
+```
+
+---
+
 ## Python version (`iptables_overview.py`)
 
-Reads `iptables-save` output. Best for systems using the iptables frontend (including `iptables-nft`).
+Reads `iptables-save` output directly. Best for systems using the iptables frontend (including `iptables-nft`).
 
 ### Requirements
 
@@ -24,10 +60,7 @@ Reads `iptables-save` output. Best for systems using the iptables frontend (incl
 ### Usage
 
 ```bash
-# Run with default output file (iptables-overview-<hostname>.txt)
 python3 iptables_overview.py
-
-# Specify output file
 python3 iptables_overview.py -o /tmp/my-server.txt
 ```
 
@@ -46,10 +79,7 @@ Identical output to the Python version, implemented in Bash.
 ### Usage
 
 ```bash
-# Run with default output file (iptables-overview-<hostname>.txt)
 bash iptables_overview.sh
-
-# Specify output file
 bash iptables_overview.sh -o /tmp/my-server.txt
 ```
 
@@ -57,9 +87,9 @@ bash iptables_overview.sh -o /tmp/my-server.txt
 
 ## nft-native Python version (`nft_overview.py`)
 
-Reads rules directly via `sudo nft -j list ruleset` (JSON). Best for systems using native nftables rulesets.
+Reads rules directly via `sudo nft -j list ruleset` (JSON). Best for pure nftables systems.
 
-> **Note for iptables-nft systems**: If your system uses `iptables` as a frontend over nftables (check with `iptables --version` — look for `nf_tables`), port matching via `xt multiport` extensions will appear as `(multiport)` since those parameters are opaque in the nft JSON. DNAT destinations are supplemented automatically via `iptables-save -t nat`. For full per-port details on iptables-nft systems, use `iptables_overview.py` instead.
+> **Note for iptables-nft systems**: Port matching via `xt multiport` extensions is opaque in the nft JSON — ports appear as `(multiport)`. DNAT destinations are supplemented via `iptables-save -t nat`. For full per-port details on iptables-nft systems, use `firewall_overview.py` (auto) or `--backend iptables`.
 
 ### Requirements
 
@@ -69,10 +99,7 @@ Reads rules directly via `sudo nft -j list ruleset` (JSON). Best for systems usi
 ### Usage
 
 ```bash
-# Run with default output file (nft-overview-<hostname>.txt)
 python3 nft_overview.py
-
-# Specify output file
 python3 nft_overview.py -o /tmp/my-server.txt
 ```
 
