@@ -1,34 +1,29 @@
-# iptables-overview
+# firewall-overview
 
-Displays a clear, color-coded overview of all ingress and egress firewall rules — including NAT/DNAT routing.
+Displays a clear, color-coded overview of all ingress and egress firewall rules — including NAT/DNAT routing and ipset/nft-set IP group expansion.
 
-**Recommended: use `firewall_overview.py`** — it auto-detects whether the system uses iptables or nftables and picks the best parser automatically. Individual scripts are also available if you want to force a specific backend.
+Automatically detects whether the system uses **iptables** (legacy or nft frontend) or **pure nftables** and picks the best parser.
 
 ## Features
 
+- **Auto-detection**: prefers `iptables-save` when active rules exist (gives full port detail for iptables-nft systems); falls back to `nft -j list ruleset` for pure nftables
 - **Three-step ingress model**: RAW PREROUTING → NAT PREROUTING (DNAT) → INPUT filter
 - **DNAT-aware summary**: ports forwarded to Docker/containers are shown separately and excluded from ALLOW/DROP counts
 - **Recursive chain resolution**: follows Illumio VEN (`ILO-FILTER-*`) and custom chains to determine the final action
+- **IP group expansion**: resolves ipset groups (`--match-set`) and native nft sets (`@SETNAME`) — IPs are listed directly below the rule
+- **inet family support**: handles native nftables VEN deployments using the `inet` family (e.g. CentOS/RHEL with Illumio VEN)
 - **Color-coded terminal output** + plain-text file output (ANSI stripped)
-- **Generic**: works on any Linux host — auto-detects hostname, chains, and DNAT targets
 
----
-
-## Auto-detecting version (`firewall_overview.py`) — recommended
-
-Automatically selects the best parser:
-1. Uses `iptables-save` when iptables has active rules (covers both `iptables-legacy` and `iptables-nft` — gives full port detail via multiport/ctstate)
-2. Falls back to `nft -j list ruleset` for pure nftables systems
-
-### Requirements
+## Requirements
 
 - Python 3.6+
 - `sudo` access to run `iptables-save` and/or `nft`
+- `ipset` (optional — for IP group expansion on iptables systems)
 
-### Usage
+## Usage
 
 ```bash
-# Auto-detect backend (default)
+# Auto-detect backend (recommended)
 python3 firewall_overview.py
 
 # Force iptables engine
@@ -37,87 +32,27 @@ python3 firewall_overview.py --backend iptables
 # Force nft engine
 python3 firewall_overview.py --backend nft
 
-# Specify output file
+# Write output to a specific file
 python3 firewall_overview.py -o /tmp/my-server.txt
 ```
 
-The detected backend is shown in the header, e.g.:
+The detected backend is shown in the header:
 ```
 Firewall Overview  –  hostname.example.com  [iptables / iptables-nft – auto-detected]
+Firewall Overview  –  hostname.example.com  [nftables – auto-detected]
 ```
-
----
-
-## Python version (`iptables_overview.py`)
-
-Reads `iptables-save` output directly. Best for systems using the iptables frontend (including `iptables-nft`).
-
-### Requirements
-
-- Python 3.6+
-- `sudo` access to run `iptables-save`
-
-### Usage
-
-```bash
-python3 iptables_overview.py
-python3 iptables_overview.py -o /tmp/my-server.txt
-```
-
----
-
-## Bash version (`iptables_overview.sh`)
-
-Identical output to the Python version, implemented in Bash.
-
-### Requirements
-
-- Bash 4+
-- `sudo` access to run `iptables-save`
-- `grep` with PCRE support (`grep -P`) — available by default on Ubuntu/RHEL
-
-### Usage
-
-```bash
-bash iptables_overview.sh
-bash iptables_overview.sh -o /tmp/my-server.txt
-```
-
----
-
-## nft-native Python version (`nft_overview.py`)
-
-Reads rules directly via `sudo nft -j list ruleset` (JSON). Best for pure nftables systems.
-
-> **Note for iptables-nft systems**: Port matching via `xt multiport` extensions is opaque in the nft JSON — ports appear as `(multiport)`. DNAT destinations are supplemented via `iptables-save -t nat`. For full per-port details on iptables-nft systems, use `firewall_overview.py` (auto) or `--backend iptables`.
-
-### Requirements
-
-- Python 3.6+
-- `sudo` access to run `nft` and `iptables-save`
-
-### Usage
-
-```bash
-python3 nft_overview.py
-python3 nft_overview.py -o /tmp/my-server.txt
-```
-
----
 
 ## Output structure
 
-`iptables_overview.py` and `iptables_overview.sh` produce identical output:
-
 ```
-iptables Firewall Overview  -  hostname.example.com
+Firewall Overview  –  hostname.example.com  [iptables / iptables-nft – auto-detected]
 
 Default Policies (*filter):
   INPUT       : ACCEPT
   FORWARD     : DROP
   OUTPUT      : ACCEPT
 
-INGRESS  -  INPUT chain
+INGRESS  –  INPUT chain
   -- Step 1 - RAW PREROUTING (before DNAT) --
   NAT  any  172.17.0.2  any  ! via docker0  DROP
        -> Direct access to Docker container blocked
@@ -128,31 +63,31 @@ INGRESS  -  INPUT chain
 
   -- Step 3 - INPUT filter (ILO-FILTER-INPUT) --
   1    any   any  any  22,80  NEW      ALLOW
-  2    any   any  any  8081   NEW      DROP
-       -> Illumio enforcement - applies only to traffic NOT redirected via DNAT
+  ...
+  6    tcp   172.17.0.1[docker0]  any  22:23  NEW  ALLOW
+             172.24.50.112
+             172.24.50.161
+             172.24.50.164
   ...
   8    any   any  any  any    DEFAULT  DROP
        -> All connections not explicitly covered above
 
-EGRESS  -  OUTPUT chain
+EGRESS  –  OUTPUT chain
   ...
 
 SUMMARY:
   + INGRESS ALLOW:  22 (SSH) [tcp], 80 (HTTP) [tcp], ...
   - INGRESS DROP:   ...
-  > NAT/DNAT:       8081 (HTTP-alt) -> 172.17.0.2:80, 8082 -> 172.17.0.3:80
+  > NAT/DNAT:       8081 (HTTP-alt) -> 172.17.0.2:80
                     (DNAT ports bypass INPUT filter - traffic routed via FORWARD to container)
   + EGRESS ALLOW:   53 (DNS) [tcp], ...
 
-  Output written to: iptables-overview-hostname.example.com.txt
+  Output written to: firewall-overview-hostname.example.com.txt
 ```
-
-`nft_overview.py` produces the same structure but reads from the nftables JSON backend.
-
----
 
 ## Tested on
 
-- Ubuntu 22.04 with Illumio VEN (`ILO-FILTER-*` chains)
+- Ubuntu 22.04 with Illumio VEN (`ILO-FILTER-*` chains, iptables-nft frontend)
+- CentOS / RHEL with Illumio VEN (`inet ILO-FILTER-X` table, native nftables)
 - Docker host with DNAT port forwarding
-- Systems using `iptables-nft` (iptables frontend over nftables backend)
+- Systems using ipset groups and native nft sets for IP whitelists
