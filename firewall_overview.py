@@ -834,9 +834,16 @@ def detect_backend():
                            capture_output=True, text=True, timeout=15)
         if r.returncode == 0:
             ipt_raw = r.stdout
-            rule_count = sum(1 for l in ipt_raw.splitlines() if l.startswith("-A "))
-            if rule_count >= 3:
-                # Detect iptables variant for the label
+            # Only use iptables backend if the *filter table has actual INPUT/OUTPUT or
+            # ILO-FILTER rules. Docker adds FORWARD/DOCKER rules (and nat OUTPUT rules)
+            # but leaves *filter INPUT empty — in that case the real enforcement lives
+            # in nftables and we must fall through to the nft backend.
+            cur_tbl = ""; input_rules = 0
+            for l in ipt_raw.splitlines():
+                if l.startswith("*"):       cur_tbl = l[1:]
+                elif cur_tbl == "filter" and re.match(r"-A (INPUT|OUTPUT|ILO-FILTER)", l):
+                    input_rules += 1
+            if input_rules >= 1:
                 try:
                     v = subprocess.run(["iptables","--version"],
                                        capture_output=True, text=True, timeout=5)
