@@ -286,7 +286,7 @@ def ipt_collect_dnat(all_chains, table, chain_name, seen=None):
             rows.append(mk_nat(
                 proto.group(1) if proto else "any", "any", "<server>", dp,
                 "  ".join(conds) if conds else "any", "->DNAT",
-                f"Forwarded to {to}  –  traffic continues via FORWARD (bypasses INPUT)",
+                f"Destination port remapped → {to}  –  traffic routed via FORWARD chain (not INPUT)",
                 dnat_to=to
             ))
         elif (table, target) in all_chains:
@@ -404,7 +404,7 @@ def run_iptables(raw_text, hostname, outfile, backend_label):
     if i_dnat:
         print(f"  {MGT}> NAT/DNAT:    {R}  "
               + ", ".join(f"{port_label(r['dport'])} -> {r.get('dnat_to','?')}" for r in i_dnat))
-        print(f"  {GRY}               (DNAT ports bypass INPUT filter – traffic routed via FORWARD to container){R}")
+        print(f"  {GRY}               (DNAT remaps destination port – traffic routed via FORWARD chain, not INPUT){R}")
     e_allow_str = ", ".join(f"{port_label(r['dport'])} [{r['proto']}]" for r in e_allow)
     print(f"  {YEL}+ EGRESS ALLOW: {R}  "
           + (e_allow_str + ",  " if e_allow_str else "")
@@ -675,8 +675,8 @@ def nft_collect_ingress(chains, policies, nft_sets=None, family="ip", table="fil
     dnat_ports = {f["dport"] for f in dnat_rules if f.get("dport")}
     rows.append(separator("Step 2 – NAT PREROUTING (DNAT – before INPUT filter!)"))
     for f in dnat_rules:
-        note = (f"Forwarded to {f['dnat_to']}  –  traffic continues via FORWARD (bypasses INPUT)"
-                if f.get("dnat_to") else "DNAT – traffic continues via FORWARD (bypasses INPUT)")
+        note = (f"Destination port remapped → {f['dnat_to']}  –  traffic routed via FORWARD chain (not INPUT)"
+                if f.get("dnat_to") else "DNAT – destination port remapped, traffic routed via FORWARD chain")
         rows.append({**f, "dst":"<server>", "row_type":"nat", "note":note})
 
     input_chain = nft_get_effective_chain(chains, table, input_base, family)
@@ -830,7 +830,7 @@ def run_nft(ruleset, ipt_dnat_map, hostname, outfile, backend_label):
     if dnat_rules:
         print(f"  {MGT}> NAT/DNAT:    {R}  "
               + ", ".join(f"{port_label(r['dport'])} -> {r['dnat_to']}" for r in dnat_rules))
-        print(f"  {GRY}               (DNAT ports bypass INPUT filter – traffic routed via FORWARD to container){R}")
+        print(f"  {GRY}               (DNAT remaps destination port – traffic routed via FORWARD chain, not INPUT){R}")
     e_allow_str = ", ".join(f"{port_label(r['dport'])} [{r['proto']}]" for r in e_allow)
     print(f"  {YEL}+ EGRESS ALLOW: {R}  "
           + (e_allow_str + ",  " if e_allow_str else "")
